@@ -16,14 +16,15 @@ from faster_rcnn.fast_rcnn.config import cfg, cfg_from_file, get_output_dir
 
 # hyper-parameters
 # ------------
-imdb_name = 'voc_2007_test'
+imdb_name = 'openimages_test'
 cfg_file = 'experiments/cfgs/faster_rcnn_end2end.yml'
 # trained_model = '/media/longc/Data/models/VGGnet_fast_rcnn_iter_70000.h5'
-trained_model = 'models/saved_model3/faster_rcnn_90000.h5'
+trained_model = '/datasets/OpenImages/models/faster_rcnn_densenet_freeze_50000.h5'
+repeat = False
 
 rand_seed = 1024
 
-save_name = 'faster_rcnn_100000'
+save_name = 'densenet_freeze_50000'
 max_per_image = 300
 thresh = 0.05
 vis = False
@@ -95,49 +96,50 @@ def test_net(name, net, imdb, max_per_image=300, thresh=0.05, vis=False):
     # timers
     _t = {'im_detect': Timer(), 'misc': Timer()}
     det_file = os.path.join(output_dir, 'detections.pkl')
+    
+    if not repeat:
+        for i in range(num_images):
 
-    for i in range(num_images):
+            im = cv2.imread(imdb.image_path_at(i))
+            _t['im_detect'].tic()
+            scores, boxes = im_detect(net, im)
+            detect_time = _t['im_detect'].toc(average=False)
 
-        im = cv2.imread(imdb.image_path_at(i))
-        _t['im_detect'].tic()
-        scores, boxes = im_detect(net, im)
-        detect_time = _t['im_detect'].toc(average=False)
-
-        _t['misc'].tic()
-        if vis:
-            # im2show = np.copy(im[:, :, (2, 1, 0)])
-            im2show = np.copy(im)
-
-        # skip j = 0, because it's the background class
-        for j in xrange(1, imdb.num_classes):
-            inds = np.where(scores[:, j] > thresh)[0]
-            cls_scores = scores[inds, j]
-            cls_boxes = boxes[inds, j * 4:(j + 1) * 4]
-            cls_dets = np.hstack((cls_boxes, cls_scores[:, np.newaxis])) \
-                .astype(np.float32, copy=False)
-            keep = nms(cls_dets, cfg.TEST.NMS)
-            cls_dets = cls_dets[keep, :]
+            _t['misc'].tic()
             if vis:
-                im2show = vis_detections(im2show, imdb.classes[j], cls_dets)
-            all_boxes[j][i] = cls_dets
+                # im2show = np.copy(im[:, :, (2, 1, 0)])
+                im2show = np.copy(im)
 
-        # Limit to max_per_image detections *over all classes*
-        if max_per_image > 0:
-            image_scores = np.hstack([all_boxes[j][i][:, -1]
-                                      for j in xrange(1, imdb.num_classes)])
-            if len(image_scores) > max_per_image:
-                image_thresh = np.sort(image_scores)[-max_per_image]
-                for j in xrange(1, imdb.num_classes):
-                    keep = np.where(all_boxes[j][i][:, -1] >= image_thresh)[0]
-                    all_boxes[j][i] = all_boxes[j][i][keep, :]
-        nms_time = _t['misc'].toc(average=False)
+            # skip j = 0, because it's the background class
+            for j in xrange(1, imdb.num_classes):
+                inds = np.where(scores[:, j] > thresh)[0]
+                cls_scores = scores[inds, j]
+                cls_boxes = boxes[inds, j * 4:(j + 1) * 4]
+                cls_dets = np.hstack((cls_boxes, cls_scores[:, np.newaxis])) \
+                    .astype(np.float32, copy=False)
+                keep = nms(cls_dets, cfg.TEST.NMS)
+                cls_dets = cls_dets[keep, :]
+                if vis:
+                    im2show = vis_detections(im2show, imdb.classes[j], cls_dets)
+                all_boxes[j][i] = cls_dets
 
-        print 'im_detect: {:d}/{:d} {:.3f}s {:.3f}s' \
-            .format(i + 1, num_images, detect_time, nms_time)
+            # Limit to max_per_image detections *over all classes*
+            if max_per_image > 0:
+                image_scores = np.hstack([all_boxes[j][i][:, -1]
+                                          for j in xrange(1, imdb.num_classes)])
+                if len(image_scores) > max_per_image:
+                    image_thresh = np.sort(image_scores)[-max_per_image]
+                    for j in xrange(1, imdb.num_classes):
+                        keep = np.where(all_boxes[j][i][:, -1] >= image_thresh)[0]
+                        all_boxes[j][i] = all_boxes[j][i][keep, :]
+            nms_time = _t['misc'].toc(average=False)
 
-        if vis:
-            cv2.imshow('test', im2show)
-            cv2.waitKey(1)
+            print 'im_detect: {:d}/{:d} {:.3f}s {:.3f}s' \
+                .format(i + 1, num_images, detect_time, nms_time)
+
+            if vis:
+                cv2.imshow('test', im2show)
+                cv2.waitKey(1)
 
     with open(det_file, 'wb') as f:
         cPickle.dump(all_boxes, f, cPickle.HIGHEST_PROTOCOL)
@@ -152,7 +154,7 @@ if __name__ == '__main__':
     imdb.competition_mode(on=True)
 
     # load net
-    net = FasterRCNN(classes=imdb.classes, debug=False)
+    net = FasterRCNN(classes=imdb.classes, debug=False, model='densenet-121')
     network.load_net(trained_model, net)
     print('load model successfully!')
 

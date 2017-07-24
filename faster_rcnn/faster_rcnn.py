@@ -4,6 +4,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.autograd import Variable
+import torchvision
 
 from utils.timer import Timer
 from utils.blob import im_list_to_blob
@@ -33,17 +34,43 @@ class RPN(nn.Module):
     _feat_stride = [16, ]
     anchor_scales = [8, 16, 32]
 
-    def __init__(self):
+    def __init__(self, model='vgg16', freeze_bn=False):
         super(RPN, self).__init__()
 
-        self.features = VGG16(bn=False)
-        self.conv1 = Conv2d(512, 512, 3, same_padding=True)
-        self.score_conv = Conv2d(512, len(self.anchor_scales) * 3 * 2, 1, relu=False, same_padding=False)
-        self.bbox_conv = Conv2d(512, len(self.anchor_scales) * 3 * 4, 1, relu=False, same_padding=False)
+        if model == 'vgg16':
+            self.features = VGG16(bn=False)
+            self.conv1 = Conv2d(512, 512, 3, same_padding=True)
+            self.score_conv = Conv2d(512, len(self.anchor_scales) * 3 * 2, 1, relu=False, same_padding=False)
+            self.bbox_conv = Conv2d(512, len(self.anchor_scales) * 3 * 4, 1, relu=False, same_padding=False)
+        elif model == 'vgg11':
+            vgg = torchvision.models.vgg11(pretrained=True)
+            self.features = vgg.features
+            self.conv1 = Conv2d(512, 512, 3, same_padding=True)
+            self.score_conv = Conv2d(512, len(self.anchor_scales) * 3 * 2, 1, relu=False, same_padding=False)
+            self.bbox_conv = Conv2d(512, len(self.anchor_scales) * 3 * 4, 1, relu=False, same_padding=False)
+        elif model == 'densenet-121':
+            dn = torchvision.models.densenet121(pretrained=True)
+            if freeze_bn:
+                self.freeze_bn(dn)
+            self.features = nn.Sequential(*list(dn.features.children())[:-1])
+            # self.features = dn.features
+            self.conv1 = Conv2d(1024, 512, 3, same_padding=True)
+            self.score_conv = Conv2d(512, len(self.anchor_scales) * 3 * 2, 1, relu=False, same_padding=False)
+            self.bbox_conv = Conv2d(512, len(self.anchor_scales) * 3 * 4, 1, relu=False, same_padding=False)
+        elif model == 'resnet18':
+            rn = torchvision.models.resnet18(pretrained=True)
+            if freeze_bn:
+                self.freeze_bn(rn)
+            self.features = nn.Sequential(*list(rn.children())[:-1])
+            self.conv1 = Conv2d(512, 512, 3, same_padding=True)
+            self.score_conv = Conv2d(512, len(self.anchor_scales) * 3 * 2, 1, relu=False, same_padding=False)
+            self.bbox_conv = Conv2d(512, len(self.anchor_scales) * 3 * 4, 1, relu=False, same_padding=False)
+        else:
+            print('Unsupported model %s' % model)
 
         # loss
         self.cross_entropy = None
-        self.los_box = None
+        self.loss_box = None
 
     @property
     def loss(self):
@@ -57,6 +84,7 @@ class RPN(nn.Module):
         rpn_conv1 = self.conv1(features)
 
         # rpn score
+        # rpn_cls_score = self.score_conv(features)
         rpn_cls_score = self.score_conv(rpn_conv1)
         rpn_cls_score_reshape = self.reshape_layer(rpn_cls_score, 2)
         rpn_cls_prob = F.softmax(rpn_cls_score_reshape)
@@ -64,6 +92,7 @@ class RPN(nn.Module):
 
         # rpn boxes
         rpn_bbox_pred = self.bbox_conv(rpn_conv1)
+        # rpn_bbox_pred = self.bbox_conv(features)
 
         # proposal layer
         cfg_key = 'TRAIN' if self.training else 'TEST'
@@ -169,6 +198,11 @@ class RPN(nn.Module):
             param = torch.from_numpy(params['{}/biases:0'.format(v)])
             own_dict[key].copy_(param)
 
+    def freeze_bn(self, model):
+        for parameter in (nt[1] for nt in model.named_parameters() if 'norm' in nt[0]):
+            parameter.requires_grad = False
+
+
 
 class FasterRCNN(nn.Module):
     n_classes = 21
@@ -182,19 +216,29 @@ class FasterRCNN(nn.Module):
     SCALES = (600,)
     MAX_SIZE = 1000
 
-    def __init__(self, classes=None, debug=False):
+    def __init__(self, classes=None, debug=False, model='vgg16'):
         super(FasterRCNN, self).__init__()
 
         if classes is not None:
             self.classes = classes
             self.n_classes = len(classes)
 
-        self.rpn = RPN()
+        self.model = model
+        self.rpn = RPN(model, freeze_bn=True)
         self.roi_pool = RoIPool(7, 7, 1.0/16)
-        self.fc6 = FC(512 * 7 * 7, 4096)
-        self.fc7 = FC(4096, 4096)
-        self.score_fc = FC(4096, self.n_classes, relu=False)
-        self.bbox_fc = FC(4096, self.n_classes * 4, relu=False)
+        if model == 'vgg11' or model == 'vgg16':
+            self.fc6 = FC(512 * 7 * 7, 4096)
+            self.fc7 = FC(4096, 4096)
+            self.score_fc = FC(4096, self.n_classes, relu=False)
+            self.bbox_fc = FC(4096, self.n_classes * 4, relu=False)
+        elif model == 'densenet-121':
+            self.score_fc = FC(1024 * 7 * 7, self.n_classes, relu=False)
+            self.bbox_fc = FC(1024 * 7 * 7, self.n_classes * 4, relu=False)
+        elif model == 'resnet18':
+            self.score_fc = FC(512 * 7 * 7, self.n_classes, relu=False)
+            self.bbox_fc = FC(512 * 7 * 7, self.n_classes * 4, relu=False)
+        else:
+            print('Unsupported model %s' % model)
 
         # loss
         self.cross_entropy = None
@@ -218,14 +262,17 @@ class FasterRCNN(nn.Module):
             roi_data = self.proposal_target_layer(rois, gt_boxes, gt_ishard, dontcare_areas, self.n_classes)
             rois = roi_data[0]
 
+        if self.model == 'densenet-121':
+            out = F.relu(features)
+            features = F.avg_pool2d(out, kernel_size=7)
         # roi pool
         pooled_features = self.roi_pool(features, rois)
         x = pooled_features.view(pooled_features.size()[0], -1)
-        x = self.fc6(x)
-        x = F.dropout(x, training=self.training)
-        x = self.fc7(x)
-        x = F.dropout(x, training=self.training)
-
+        if self.model == 'vgg11' or self.model == 'vgg16':
+            x = self.fc6(x)
+            x = F.dropout(x, training=self.training)
+            x = self.fc7(x)
+            x = F.dropout(x, training=self.training)
         cls_score = self.score_fc(x)
         cls_prob = F.softmax(cls_score)
         bbox_pred = self.bbox_fc(x)

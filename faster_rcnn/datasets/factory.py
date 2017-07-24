@@ -18,6 +18,7 @@ from .kitti_tracking import kitti_tracking
 from .nthu import nthu
 from .coco import coco
 from .kittivoc import kittivoc
+from .openimages import openimages
 
 
 def _selective_search_IJCV_top_k(split, year, top_k):
@@ -49,6 +50,12 @@ for split in ['train', 'val', 'trainval', 'test']:
     name = 'kitti_{}'.format(split)
     # print name
     __sets[name] = (lambda split=split: kitti(split))
+
+# OpenImages dataset
+for split in ['train', 'val', 'trainval', 'test']:
+    name = 'openimages_{}'.format(split)
+    # print name
+    __sets[name] = (lambda split=split: openimages(split))
 
 # Set up coco_2014_<split>
 for year in ['2014']:

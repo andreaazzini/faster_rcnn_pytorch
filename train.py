@@ -12,6 +12,8 @@ from faster_rcnn.roi_data_layer.layer import RoIDataLayer
 from faster_rcnn.datasets.factory import get_imdb
 from faster_rcnn.fast_rcnn.config import cfg, cfg_from_file
 
+import torchvision.transforms
+
 try:
     from termcolor import cprint
 except ImportError:
@@ -33,14 +35,15 @@ def log_print(text, color=None, on_color=None, attrs=None):
 
 # hyper-parameters
 # ------------
-imdb_name = 'voc_2007_trainval'
+# imdb_name = 'voc_2012_trainval'
+imdb_name = 'openimages_trainval'
 cfg_file = 'experiments/cfgs/faster_rcnn_end2end.yml'
-pretrained_model = 'data/pretrained_model/VGG_imagenet.npy'
-output_dir = 'models/saved_model3'
+# pretrained_model = 'data/pretrained_model/VGG_imagenet.npy'
+output_dir = 'models/openimages'
 
 start_step = 0
-end_step = 100000
-lr_decay_steps = {60000, 80000}
+end_step = 50000
+lr_decay_steps = {25000, 40000}
 lr_decay = 1./10
 
 rand_seed = 1024
@@ -69,14 +72,14 @@ roidb = imdb.roidb
 data_layer = RoIDataLayer(roidb, imdb.num_classes)
 
 # load net
-net = FasterRCNN(classes=imdb.classes, debug=_DEBUG)
-network.weights_normal_init(net, dev=0.01)
-network.load_pretrained_npy(net, pretrained_model)
+net = FasterRCNN(classes=imdb.classes, debug=_DEBUG, model='densenet-121')
+# network.weights_normal_init(net, dev=0.01)
+# network.load_pretrained_npy(net, pretrained_model)
 # model_file = '/media/longc/Data/models/VGGnet_fast_rcnn_iter_70000.h5'
-# model_file = 'models/saved_model3/faster_rcnn_60000.h5'
+# model_file = 'models/saved_model3/faster_rcnn_10000.h5'
 # network.load_net(model_file, net)
 # exp_name = 'vgg16_02-19_13-24'
-# start_step = 60001
+start_step = 1
 # lr /= 10.
 # network.weights_normal_init([net.bbox_fc, net.score_fc, net.fc6, net.fc7], dev=0.01)
 
@@ -84,8 +87,10 @@ net.cuda()
 net.train()
 
 params = list(net.parameters())
+params = filter(lambda param: param.requires_grad, params)
 # optimizer = torch.optim.Adam(params[-8:], lr=lr)
-optimizer = torch.optim.SGD(params[8:], lr=lr, momentum=momentum, weight_decay=weight_decay)
+#optimizer = torch.optim.SGD(params[8:], lr=lr, momentum=momentum, weight_decay=weight_decay)
+optimizer = torch.optim.SGD(params, lr=lr, momentum=momentum, weight_decay=weight_decay)
 
 if not os.path.exists(output_dir):
     os.makedirs(output_dir)
@@ -97,7 +102,7 @@ if use_tensorboard:
     if remove_all_log:
         cc.remove_all_experiments()
     if exp_name is None:
-        exp_name = datetime.now().strftime('vgg16_%m-%d_%H-%M')
+        exp_name = datetime.now().strftime('openimages_densenet_norm_%m-%d_%H-%M')
         exp = cc.create_experiment(exp_name)
     else:
         exp = cc.open_experiment(exp_name)
@@ -114,10 +119,18 @@ for step in range(start_step, end_step+1):
     # get one batch
     blobs = data_layer.forward()
     im_data = blobs['data']
+    im_data /= 255
     im_info = blobs['im_info']
     gt_boxes = blobs['gt_boxes']
     gt_ishard = blobs['gt_ishard']
     dontcare_areas = blobs['dontcare_areas']
+
+    # transforms.Compose([
+    #     transforms.Normalize(mean=[0.485, 0.456, 0.406],
+    #                         std=[0.229, 0.224, 0.225]),
+    #     transforms.ToPILImage(),
+    #     transforms.RandomHorizontalFlip() # NEED TO FLIP THE BBOXES, TOO!
+    # ])
 
     # forward
     net(im_data, im_info, gt_boxes, gt_ishard, dontcare_areas)
@@ -166,13 +179,14 @@ for step in range(start_step, end_step+1):
                       'rcnn_box': float(net.loss_box.data.cpu().numpy()[0])}
             exp.add_scalar_dict(losses, step=step)
 
-    if (step % 10000 == 0) and step > 0:
-        save_name = os.path.join(output_dir, 'faster_rcnn_{}.h5'.format(step))
+    if (step % 5000 == 0) and step > 0:
+        save_name = os.path.join(output_dir, 'densenet_norm_{}.h5'.format(step))
         network.save_net(save_name, net)
         print('save model: {}'.format(save_name))
     if step in lr_decay_steps:
         lr *= lr_decay
-        optimizer = torch.optim.SGD(params[8:], lr=lr, momentum=momentum, weight_decay=weight_decay)
+        # optimizer = torch.optim.SGD(params[8:], lr=lr, momentum=momentum, weight_decay=weight_decay)
+        optimizer = torch.optim.SGD(params, lr=lr, momentum=momentum, weight_decay=weight_decay)
 
     if re_cnt:
         tp, tf, fg, bg = 0., 0., 0, 0
